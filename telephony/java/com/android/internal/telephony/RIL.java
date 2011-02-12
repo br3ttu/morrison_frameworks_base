@@ -796,7 +796,7 @@ public final class RIL extends BaseCommands implements CommandsInterface {
 
     public void
     dial (String address, int clirMode, Message result) {
-        dial(address, clirMode, null, result);
+         dial(address, clirMode, null, result);
     }
 
     public void
@@ -805,7 +805,7 @@ public final class RIL extends BaseCommands implements CommandsInterface {
 
         rr.mp.writeString(address);
         rr.mp.writeInt(clirMode);
-        rr.mp.writeInt(0); // UUS information is absent
+    //    rr.mp.writeInt(0); // UUS information is absent
 
         if (uusInfo == null) {
             rr.mp.writeInt(0); // UUS information is absent
@@ -1425,6 +1425,7 @@ public final class RIL extends BaseCommands implements CommandsInterface {
 
         rr.mp.writeInt(command);
         rr.mp.writeInt(fileid);
+        path = null; // apparently?
         rr.mp.writeString(path);
         rr.mp.writeInt(p1);
         rr.mp.writeInt(p2);
@@ -2856,8 +2857,7 @@ public final class RIL extends BaseCommands implements CommandsInterface {
                 dc.uusInfo.setDcs(p.readInt());
                 byte[] userData = p.createByteArray();
                 dc.uusInfo.setUserData(userData);
-                Log
-                        .v(LOG_TAG, String.format("Incoming UUS : type=%d, dcs=%d, length=%d",
+                Log.v(LOG_TAG, String.format("Incoming UUS : type=%d, dcs=%d, length=%d",
                                 dc.uusInfo.getType(), dc.uusInfo.getDcs(),
                                 dc.uusInfo.getUserData().length));
                 Log.v(LOG_TAG, "Incoming UUS : data (string)="

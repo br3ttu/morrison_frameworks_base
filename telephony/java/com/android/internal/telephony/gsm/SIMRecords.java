@@ -29,6 +29,8 @@ import com.android.internal.telephony.AdnRecord;
 import com.android.internal.telephony.AdnRecordCache;
 import com.android.internal.telephony.AdnRecordLoader;
 import com.android.internal.telephony.CommandsInterface;
+import android.telephony.gsm.GsmCellLocation;
+import com.android.internal.telephony.IccCardApplication;
 import com.android.internal.telephony.IccFileHandler;
 import com.android.internal.telephony.IccRecords;
 import com.android.internal.telephony.IccUtils;
@@ -60,7 +62,8 @@ public final class SIMRecords extends IccRecords {
 
     String imsi;
     boolean callForwardingEnabled;
-
+    boolean isPlmnModeBitEnabled;
+    boolean isPrevPlmnModeBitEnabled;
 
     /**
      * States only used by getSpnFsm FSM
@@ -79,7 +82,21 @@ public final class SIMRecords extends IccRecords {
     byte[] mEfCff = null;
     byte[] mEfCfis = null;
 
-
+    boolean isCspFileChanged;
+    ArrayList oplCache;
+    int oplDataLac1;
+    int oplDataLac2;
+    short oplDataPnnNum;
+    boolean oplDataPresent;
+    boolean oplFetchingException;
+    boolean isNetworkManual;
+    ArrayList pnnCache;
+    String pnnDataLongName;
+    boolean pnnDataPresent;
+    String pnnDataShortName;
+    boolean pnnFetchingException;
+    int sstPlmnOplValue;
+    
     int spnDisplayCondition;
     // Numeric network codes listed in TS 51.011 EF[SPDI]
     ArrayList<String> spdiNetworks = null;
@@ -110,6 +127,14 @@ public final class SIMRecords extends IccRecords {
     // CPHS Service Table (See CPHS 4.2 B.3.1)
     private static final int CPHS_SST_MBN_MASK = 0x30;
     private static final int CPHS_SST_MBN_ENABLED = 0x30;
+    
+    // USIM Stuff
+    static final int EONS_ATT_ALG = 0x1;
+    private static int EONS_DISABLED = 0;
+    static final int EONS_TMO_ALG = 0x2;
+    private static int ONLY_PNN_ENABLED = 0x2;
+    private static int PNN_OPL_ENABLED = 0x1;
+    private static int NOT_INITIALIZED = -1;
 
     // ***** Event Constants
 
@@ -140,25 +165,14 @@ public final class SIMRecords extends IccRecords {
     private static final int EVENT_SET_MSISDN_DONE = 30;
     private static final int EVENT_SIM_REFRESH = 31;
     private static final int EVENT_GET_CFIS_DONE = 32;
-
-    // Lookup table for carriers known to produce SIMs which incorrectly indicate MNC length.
-
-    private static final String[] MCCMNC_CODES_HAVING_3DIGITS_MNC = {
-        "405025", "405026", "405027", "405028", "405029", "405030", "405031", "405032",
-        "405033", "405034", "405035", "405036", "405037", "405038", "405039", "405040",
-        "405041", "405042", "405043", "405044", "405045", "405046", "405047", "405750",
-        "405751", "405752", "405753", "405754", "405755", "405756", "405799", "405800",
-        "405801", "405802", "405803", "405804", "405805", "405806", "405807", "405808",
-        "405809", "405810", "405811", "405812", "405813", "405814", "405815", "405816",
-        "405817", "405818", "405819", "405820", "405821", "405822", "405823", "405824",
-        "405825", "405826", "405827", "405828", "405829", "405830", "405831", "405832",
-        "405833", "405834", "405835", "405836", "405837", "405838", "405839", "405840",
-        "405841", "405842", "405843", "405844", "405845", "405846", "405847", "405848",
-        "405849", "405850", "405851", "405852", "405853", "405875", "405876", "405877",
-        "405878", "405879", "405880", "405881", "405882", "405883", "405884", "405885",
-        "405886", "405908", "405909", "405910", "405911", "405925", "405926", "405927",
-        "405928", "405929", "405932"
-    };
+    private static final int EVENT_GET_ALL_OPL_RECORDS_DONE = 33;
+    private static final int EVENT_GET_CSP_CPHS_DONE = 34;
+    private static final int EVENT_GET_ALL_PNN_RECORDS_DONE = 35;
+    private static final int EVENT_GET_EMAIL_GW_DONE = 36;
+    private static final int EVENT_GET_USIM_ECC_DONE = 37;
+    private static final int EVENT_GET_SIM_ECC_DONE = 38;
+    private static final int EVENT_GET_CSP_DONE = 39;
+    private static final int EVENT_AUTO_SELECT_DONE = 40;
 
     // ***** Constructor
 
@@ -170,6 +184,13 @@ public final class SIMRecords extends IccRecords {
         mVmConfig = new VoiceMailConstants();
         mSpnOverride = new SpnOverride();
 
+        isCspFileChanged = false;
+        isPlmnModeBitEnabled = true;
+        isPrevPlmnModeBitEnabled = true;
+        oplFetchingException = false;
+        pnnFetchingException = false;
+        isNetworkManual = false;
+        
         recordsRequested = false;  // No load request is made till SIM ready
 
         // recordsToLoad is set to 0 because no requests are made yet
@@ -257,7 +278,7 @@ public final class SIMRecords extends IccRecords {
         msisdn = number;
         msisdnTag = alphaTag;
 
-        if(DBG) log("Set MSISDN: " + msisdnTag + " " + /*msisdn*/ "xxxxxxx");
+        if(DBG) log("Set MSISDN: " + msisdnTag +" " + msisdn);
 
 
         AdnRecord adn = new AdnRecord(msisdnTag, msisdn);
@@ -515,18 +536,7 @@ public final class SIMRecords extends IccRecords {
                     imsi = null;
                 }
 
-                Log.d(LOG_TAG, "IMSI: " + imsi.substring(0, 6) + "xxxxxxx");
-
-                if (((mncLength == UNKNOWN) || (mncLength == 2)) &&
-                        ((imsi != null) && (imsi.length() >= 6))) {
-                    String mccmncCode = imsi.substring(0, 6);
-                    for (String mccmnc : MCCMNC_CODES_HAVING_3DIGITS_MNC) {
-                        if (mccmnc.equals(mccmncCode)) {
-                            mncLength = 3;
-                            break;
-                        }
-                    }
-                }
+                Log.d(LOG_TAG, "IMSI: " + imsi.substring(0, 6) + "xxxxxxxxx");
 
                 if (mncLength == UNKNOWN) {
                     // the SIM has told us all it knows, but it didn't know the mnc length.
@@ -649,7 +659,7 @@ public final class SIMRecords extends IccRecords {
                 msisdn = adn.getNumber();
                 msisdnTag = adn.getAlphaTag();
 
-                Log.d(LOG_TAG, "MSISDN: " + /*msisdn*/ "xxxxxxx");
+                Log.d(LOG_TAG, "MSISDN: " + msisdn);
             break;
 
             case EVENT_SET_MSISDN_DONE:
@@ -772,17 +782,6 @@ public final class SIMRecords extends IccRecords {
                         mncLength = UNKNOWN;
                     }
                 } finally {
-                    if (((mncLength == UNINITIALIZED) || (mncLength == UNKNOWN) ||
-                            (mncLength == 2)) && ((imsi != null) && (imsi.length() >= 6))) {
-                        String mccmncCode = imsi.substring(0, 6);
-                        for (String mccmnc : MCCMNC_CODES_HAVING_3DIGITS_MNC) {
-                            if (mccmnc.equals(mccmncCode)) {
-                                mncLength = 3;
-                                break;
-                            }
-                        }
-                    }
-
                     if (mncLength == UNKNOWN || mncLength == UNINITIALIZED) {
                         if (imsi != null) {
                             try {
@@ -921,6 +920,7 @@ public final class SIMRecords extends IccRecords {
                 }
                 break;
             case EVENT_GET_SST_DONE:
+                log( "EVENT_GET_SST_DONE");
                 isRecordLoadResponse = true;
 
                 ar = (AsyncResult)msg.obj;
@@ -929,8 +929,8 @@ public final class SIMRecords extends IccRecords {
                 if (ar.exception != null) {
                     break;
                 }
-
-                //Log.d(LOG_TAG, "SST: " + IccUtils.bytesToHexString(data));
+                if (DBG) log("EVENT_GET_SST_DONE - SST: " + IccUtils.bytesToHexString(data));
+                handleSstData( data );
             break;
 
             case EVENT_GET_INFO_CPHS_DONE:
@@ -1034,6 +1034,213 @@ public final class SIMRecords extends IccRecords {
 
                 ((GSMPhone) phone).notifyCallForwardingIndicator();
                 break;
+            case EVENT_GET_ALL_OPL_RECORDS_DONE: //:pswitch_d26
+            	isRecordLoadResponse = true;
+            	if (DBG) log("EVENT_GET_ALL_OPL_RECORDS_DONE");
+
+                ar = (AsyncResult)msg.obj;
+
+                if (ar.exception != null) {
+                	Log.e(LOG_TAG, "Exception in fetching OPL Records " + ar.exception);
+                	oplCache = null;
+                	oplFetchingException = true;
+                    break;
+                }
+            	
+                oplFetchingException = false;
+                oplCache = (ArrayList) ar.result;
+                displayEonsName( 0 );
+                break;
+            case EVENT_GET_ALL_PNN_RECORDS_DONE: //:pswitch_d83
+            	isRecordLoadResponse = true;
+            	if ( DBG ) log("EVENT_GET_ALL_PNN_RECORDS_DONE");
+                ar = (AsyncResult)msg.obj;
+
+                if (ar.exception != null) {
+                	Log.e(LOG_TAG, "Exception in fetching PNN Records " + ar.exception);
+                	pnnCache = null;
+                	pnnFetchingException = true;
+                    break;
+                }
+                
+                pnnFetchingException = false;
+                pnnCache = (ArrayList) ar.result;
+                displayEonsName(0);
+                break;
+            case EVENT_GET_EMAIL_GW_DONE: //:pswitch_35a
+            	isRecordLoadResponse = true;
+            	if (DBG) log("[handleMessage]: EVENT_GET_EMAIL_GW_DONE");
+                ar = (AsyncResult)msg.obj;
+
+                if (ar.exception != null) {
+                	if ( DBG ) log("[handleMessage]: Invalid or missing EF[SMSP]");
+                    break;
+                }
+                if ( ar.result instanceof byte[] ) {
+                	SmspRecord smspRec = new SmspRecord((byte[]) ar.result);
+                	if ( smspRec.isEmailGwTag()) {
+                		String emailGateway = smspRec.getServiceCentreAddr();
+                		if ( DBG ) log("warning! it is  workaround for ATT:ignore email gateway number from simcard ");
+                		if ( DBG ) log("[handleMessage]: emailGateway:" + emailGateway);
+                	}
+                	else {
+                		if ( DBG ) log("not email gateway alpha tag");
+                	}
+                }
+                else {
+                	if ( DBG ) log("skip emailGateway ar.result=" + ar.result );
+                }
+                break;
+            case EVENT_GET_USIM_ECC_DONE: //:pswitch_f61
+            	isRecordLoadResponse = true;
+            	StringBuffer eccList = new StringBuffer( "911,112" );
+            	String carrier_ecc = SystemProperties.get("ro.mot.carrier.ecc");
+            	if ( carrier_ecc != null ) {
+            		eccList.append("," + carrier_ecc);
+            		if ( DBG ) log("EVENT_GET_USIM_ECC_DONE Carrier ECC numbers added ECC list" + carrier_ecc);
+            	}
+            	String[] eccRecords;
+                ar = (AsyncResult)msg.obj;
+
+                if (ar.exception != null) {
+                	if (DBG) log( "Either it is 2G SIM Card or something else happening..try to read emergency numbers from 2G Card now" );
+                	phone.getIccFileHandler().loadEFTransparent(EF_ECC, obtainMessage(EVENT_GET_SIM_ECC_DONE));
+                	recordsToLoad++;
+                	break;
+                }
+                
+                eccRecords = handleUsimEmergencyNumbers((ArrayList) ar.result);
+                if ( eccRecords != null ) {
+                	if ( DBG ) log("numECC records final coming out =" + eccRecords.length);
+                	for (int iterator=0; iterator<eccRecords.length; iterator++) {
+                		if ( eccRecords[iterator] == null )		continue;
+                		if ( eccRecords[iterator] == "" )		continue;
+                		if ( eccRecords[iterator] == "911" )	continue;
+                		if ( eccRecords[iterator] == "112" )	continue;
+                		boolean dup = false;
+                		for (int j=0; j<iterator; j++) {
+                			if ( !dup ) {
+                				dup = eccRecords[iterator].equals( eccRecords[j]);
+                			}
+                		}
+                		
+                		if ( dup ) {
+                			Log.i("SIMRecords.java", "Skipping dup ECC list number " + eccRecords[iterator]);
+                		}
+                		else {
+                			eccList.append( "," + eccRecords[iterator]);
+                			Log.i("SIMRecords.java", "Appending ECC list number " + eccRecords[iterator]);
+                		}
+                	}
+                	if ( DBG ) log ("ECC new list in string " + eccList);
+                }
+            	SystemProperties.set("ro.ril.ecclist", eccList.toString());
+            	break;
+            case EVENT_GET_SIM_ECC_DONE: //:pswitch_10e0
+            	isRecordLoadResponse = true;
+            	StringBuffer eccSimList = new StringBuffer("911,112");
+            	String[] eccSIMRecords = new String[6];
+            	String sim_carrier_ecc = SystemProperties.get("ro.mot.carrier.ecc");
+            	if (sim_carrier_ecc != null) {
+            		eccSimList.append("," + sim_carrier_ecc);
+            		if ( DBG ) log("EVENT_GET_SIM_ECC_DONE Carrier ECC numbers added to ECC list" + sim_carrier_ecc);
+            	}
+            	int count = 0;
+            	int size = 0;
+                ar = (AsyncResult)msg.obj;
+                data = (byte[])ar.result;
+            	if ( DBG ) log ("response 2g sim emergency numbers: " + IccUtils.bytesToHexString( data ));
+                if ((ar.exception != null) || (data.length < 1)) {
+                	StringBuffer eccNoSimList = new StringBuffer("911,112,000,08,110,999,118,119");
+                	SystemProperties.set("ro.ril.ecclist", eccNoSimList.toString());
+                	if ( DBG ) log("No SIM card ECC new list in string " + eccNoSimList);
+                }
+                else {
+                	size = (data.length / 3)*3;
+                	
+                	if ( size > 18 ) {
+                		size = 18;
+                	}
+                	int iterator;
+                	for (iterator = 0; iterator < size; iterator=iterator + 3) {
+                		int j=iterator;
+                		int digit = 0;
+                		StringBuffer tempBuf = new StringBuffer();
+            			while ( j < (iterator + 3)) {
+            				if ( iterator >= size ) break;
+            				digit = (data[iterator]>>0)&0xf;
+            				if ( digit < 0 ) break;
+            				if ( digit > 9 ) break;
+            				tempBuf.append( digit );
+            				j++;
+                		}
+            			eccSIMRecords[count++] = tempBuf.toString();
+                	}
+                	for (iterator = 0; iterator<count; iterator++) {
+                		if ( eccSIMRecords[iterator]==null) break;
+                		if ( eccSIMRecords[iterator].equals("")) break;
+                		if ( eccSIMRecords[iterator].equals("911")) break;
+                		if ( eccSIMRecords[iterator].equals("112")) break;
+                		boolean dup = false;
+                		for (int j=0; j<iterator; j++) {
+                			if (!dup) {
+                				dup = (eccSIMRecords[iterator].equals(eccSIMRecords[j]));
+                			}
+                		}
+                		if ( dup ) {
+                			Log.i("SIMRecords.java", "Skipping dup ECC list number " + eccSIMRecords[iterator]);
+                		}
+                		else {
+                			eccSimList.append("," + eccSIMRecords[iterator]);
+                			Log.i("SIMRecords.java", "Appending ECC list number " + eccSIMRecords[iterator]);	
+                		}
+                	}
+                	SystemProperties.set("ro.ril.ecclist", eccSimList.toString());
+                }
+                break;
+            case EVENT_GET_CSP_DONE: //:pswitch_e3b
+            	isRecordLoadResponse = true;
+                ar = (AsyncResult)msg.obj;
+                data = (byte[])ar.result;
+                
+                if (DBG) log("EF_CSP: " + IccUtils.bytesToHexString(data));
+                if ( ar.exception != null || data.length < 0 ) break;
+                
+            	int i;
+            	for (i=0; i<data.length; i+=2) {
+            		if ( (data[i] & 0xff) == 0xc0 ) {
+            			break;
+            		}
+            	}
+            	
+                if (i<data.length) {
+                	if ( (data[i+1] & 0x80) == 0x80 ) {
+                		isPlmnModeBitEnabled = true;
+                	}
+                	else
+                	{
+                		isPlmnModeBitEnabled = false;
+                	}
+                }
+                else {
+                	Log.e(LOG_TAG, "Doesn\'t have a VAS field in CSP");
+                }
+                isNetworkManual = phone.getServiceState().getIsManualSelection();
+                
+                if ( isNetworkManual ) {
+                	if (DBG) log("isCspChanged: " + isCspFileChanged + " isPlmnEnabled: " + isPlmnModeBitEnabled + " isPrevPlmnEnabled: " + isPrevPlmnModeBitEnabled);
+                	
+                	if ( (isCspFileChanged && ( isPlmnModeBitEnabled != isPrevPlmnModeBitEnabled )) 
+                			|| ( (!isCspFileChanged) && (! isPlmnModeBitEnabled))) {
+                		phone.setNetworkSelectionModeAutomatic(obtainMessage(EVENT_AUTO_SELECT_DONE));
+                		isCspFileChanged = false;
+                	}
+                }
+            	isPrevPlmnModeBitEnabled = isPlmnModeBitEnabled;
+            	break;
+            case EVENT_AUTO_SELECT_DONE: //:pswitch_f53 
+                if ( DBG ) log ("RESET AUTOMATIC MODE DONE");
+                break;
 
         }}catch (RuntimeException exc) {
             // I don't want these exceptions to be fatal
@@ -1058,6 +1265,37 @@ public final class SIMRecords extends IccRecords {
                 new AdnRecordLoader(phone).loadFromEF(EF_MAILBOX_CPHS, EF_EXT1,
                         1, obtainMessage(EVENT_GET_CPHS_MAILBOX_DONE));
                 break;
+            case EF_CSP: //:sswitch_85
+                recordsToLoad++;
+                phone.getIccFileHandler().loadEFTransparent(EF_CSP, obtainMessage(EVENT_GET_CSP_DONE));
+                isCspFileChanged = true;
+            	break;
+            case EF_OPL: //:sswitch_a0
+            	int eonsAlg = getOnsAlg();
+            	if (DBG) log( "EF_OPL - eonsAlg=" + eonsAlg );
+            	if ( eonsAlg == 1 || eonsAlg == 2 ) {
+            		if (DBG) log("SIM Refresh called for EF_OPL");
+            		updateOplCache();
+            	}
+            	else {
+            		if (DBG) log("handleFileUpdate() - ELSE EF_OPL");
+                    fetchSimRecords();            		
+            	}
+            	break;
+            case EF_PNN: //:sswitch_de
+            	int eonsAlgPNN = getOnsAlg();
+            	if (DBG) log("EF_PNN - eonsAlgPNN=" + eonsAlgPNN);
+            	
+            	if ( eonsAlgPNN == 1 || eonsAlgPNN == 2 ) {
+            		if (DBG) log("SIM Refresh called for EF_PNN");
+            		updatePnnCache();
+            	}
+            	else {
+            		if (DBG) log("handleFileUpdate() - ELSE EF_PNN");
+            		fetchSimRecords();
+            	}
+            	
+            	break;
             default:
                 // For now, fetch all records if this is not a
                 // voicemail number.
@@ -1272,40 +1510,65 @@ public final class SIMRecords extends IccRecords {
         recordsToLoad++;
         iccFh.loadEFTransparent(EF_CFF_CPHS, obtainMessage(EVENT_GET_CFF_DONE));
         recordsToLoad++;
-
-
+        
         getSpnFsm(true, null);
 
         iccFh.loadEFTransparent(EF_SPDI, obtainMessage(EVENT_GET_SPDI_DONE));
         recordsToLoad++;
-
-        iccFh.loadEFLinearFixed(EF_PNN, 1, obtainMessage(EVENT_GET_PNN_DONE));
-        recordsToLoad++;
-
-        iccFh.loadEFTransparent(EF_SST, obtainMessage(EVENT_GET_SST_DONE));
-        recordsToLoad++;
+        
+        int eonsAlg = getOnsAlg();
+        
+        if (DBG) log("eonsAlg=" + eonsAlg);
+        
+        if ( eonsAlg != EONS_ATT_ALG && eonsAlg != EONS_TMO_ALG) {
+            iccFh.loadEFLinearFixed(EF_PNN, 1, obtainMessage(EVENT_GET_PNN_DONE));
+            recordsToLoad++;        	
+        }
 
         iccFh.loadEFTransparent(EF_INFO_CPHS, obtainMessage(EVENT_GET_INFO_CPHS_DONE));
         recordsToLoad++;
 
-        // XXX should seek instead of examining them all
-        if (false) { // XXX
-            iccFh.loadEFLinearFixedAll(EF_SMS, obtainMessage(EVENT_GET_ALL_SMS_DONE));
+        iccFh.loadEFTransparent(EF_CSP_CPHS, obtainMessage(EVENT_GET_CSP_DONE));
+        recordsToLoad++;
+
+        iccFh.loadEFLinearFixedAll(EF_ECC, obtainMessage(EVENT_GET_USIM_ECC_DONE));
+        recordsToLoad++;
+        
+        updateOplCache();
+        updatePnnCache();
+        
+        iccFh.loadEFTransparent(EF_SST, obtainMessage(EVENT_GET_SST_DONE));
+        recordsToLoad++;
+
+        if ( SystemProperties.getBoolean("persist.cust.tel.adapt", false) || SystemProperties.getBoolean("persist.cust.tel.efcsp.plmn", false)) {
+        	if (DBG) log("Request EF_CSP_CPHS");
+        	
+            iccFh.loadEFTransparent(EF_CSP_CPHS, obtainMessage(EVENT_GET_CSP_CPHS_DONE));
             recordsToLoad++;
         }
 
-        if (CRASH_RIL) {
-            String sms = "0107912160130310f20404d0110041007030208054832b0120"
-                         + "fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
-                         + "fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
-                         + "fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
-                         + "fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
-                         + "ffffffffffffffffffffffffffffff";
-            byte[] ba = IccUtils.hexStringToBytes(sms);
+        iccFh.loadEFLinearFixed(EF_SMSP, 2, obtainMessage(EVENT_GET_EMAIL_GW_DONE));
+        recordsToLoad++;
+        
+        
+        // XXX should seek instead of examining them all
+//        if (false) { // XXX
+//            iccFh.loadEFLinearFixedAll(EF_SMS, obtainMessage(EVENT_GET_ALL_SMS_DONE));
+//            recordsToLoad++;
+//        }
 
-            iccFh.updateEFLinearFixed(EF_SMS, 1, ba, null,
-                            obtainMessage(EVENT_MARK_SMS_READ_DONE, 1));
-        }
+//        if (CRASH_RIL) {
+//            String sms = "0107912160130310f20404d0110041007030208054832b0120"
+//                         + "fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+//                         + "fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+//                         + "fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+//                         + "fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+//                         + "ffffffffffffffffffffffffffffff";
+//            byte[] ba = IccUtils.hexStringToBytes(sms);
+
+//            iccFh.updateEFLinearFixed(EF_SMS, 1, ba, null,
+//                            obtainMessage(EVENT_MARK_SMS_READ_DONE, 1));
+//        }
     }
 
     /**
@@ -1504,5 +1767,388 @@ public final class SIMRecords extends IccRecords {
     protected void log(String s) {
         Log.d(LOG_TAG, "[SIMRecords] " + s);
     }
+
+    private void handleSstData( byte[] data ) {
+	if ( DBG ) log ("handleSstData()");
+	
+	if ( phone.getIccCard().isApplicationOnIcc( IccCardApplication.AppType.APPTYPE_USIM)) {
+		int pinDisable = data[0] & 3;
+		if ( DBG ) log( "CHV1 disable setting is: " + Integer.toString( pinDisable, 16 ));
+		
+		if ( pinDisable == 0 ) {
+			phone.getIccCard().setSSTPinDisableAllow(true);			
+		}
+		else {
+			phone.getIccCard().setSSTPinDisableAllow(false);
+		}
+	}
+	try {
+		String eonsValue = SystemProperties.get("persist.cust.tel.eons");
+		if ( eonsValue != null && Integer.valueOf( eonsValue ).intValue()==EONS_TMO_ALG) {
+			if ( DBG ) log("handleSstData() - EONS enabled for T-Mobile.");
+			sstPlmnOplValue = EONS_DISABLED;
+			if ( (!oplFetchingException) && (!pnnFetchingException) ) {
+				if ( DBG ) log("handleSstData() - No PNN/OPL fetching exceptions.");
+				sstPlmnOplValue = PNN_OPL_ENABLED;
+			}
+			if ( DBG ) log("handleSstData() - sstPlmnOplValue = " + sstPlmnOplValue);
+		}
+		else {
+			if ( SystemProperties.getBoolean("persist.cust.tel.simtype", false)) {
+				sstPlmnOplValue = (data[12]>>4)&15;
+				if ( sstPlmnOplValue == 15 ) {
+					sstPlmnOplValue = PNN_OPL_ENABLED;
+					if ( DBG ) log("SST: 2G Sim,PNN and OPL services enabled " + sstPlmnOplValue );
+				}
+				else {
+					//cond_109
+					if ( sstPlmnOplValue == 3 ) {
+						sstPlmnOplValue = ONLY_PNN_ENABLED;
+						if ( DBG ) log("SST: 2G Sim,PNN enabled, OPL disabled " + sstPlmnOplValue);
+					}
+					else {
+						sstPlmnOplValue = EONS_DISABLED;
+						if ( DBG ) log("SST: 2G Sim,PNN disabled, disabling EONS " + sstPlmnOplValue);
+					}
+				}
+			}
+			else {
+				//cond_151
+				sstPlmnOplValue = (data[5]>>4)&3;
+				if ( sstPlmnOplValue == 0 ) {
+					sstPlmnOplValue = PNN_OPL_ENABLED;
+					if ( DBG ) log("SST: 3G Sim,PNN and OPL services enabled " + sstPlmnOplValue);
+				}
+				else {
+					// cond_180
+					if (sstPlmnOplValue == 1) {
+						sstPlmnOplValue = ONLY_PNN_ENABLED;
+						if ( DBG ) log("SST: 3G Sim,PNN enabled, OPL disabled " + sstPlmnOplValue);
+					}
+					else {
+						// cond_1a6
+						sstPlmnOplValue = EONS_DISABLED;
+						if ( DBG ) log("SST: 3G Sim,PNN disabled, disabling EONS " + sstPlmnOplValue);
+					}
+				}
+				
+			}
+		}
+		if ( sstPlmnOplValue == EONS_DISABLED) {
+			((GSMPhone) phone).mSST.updateSpnDisplayWrapper();
+		}
+	}
+	catch(Exception e) {
+		Log.e( "SIMRecords", "Exception in processing SST Data " + e);
+	}
+}
+
+private static String[] handleUsimEmergencyNumbers(ArrayList messages) {
+	if ( messages == null ) {
+		return null;
+	}
+	int numEccRecords=messages.size();
+	String[] tempEccRecords = new String[numEccRecords];
+	if ( DBG ) Log.d( LOG_TAG, "handleUsimEmergencyNumbers " + messages + " message size=" + numEccRecords);
+	for ( int i=0; i<numEccRecords; i++ ) {
+		byte[] ba = (byte[]) messages.get(i);
+		tempEccRecords[i] = extractEmergencyNumber( ba );
+	}
+	return tempEccRecords;
+}
+
+void updateOplCache() {
+	if ( DBG ) log("updateOplCache()");
+	IccFileHandler iccFh = phone.getIccFileHandler();
+	
+    iccFh.loadEFLinearFixedAll(EF_OPL, obtainMessage(EVENT_GET_ALL_OPL_RECORDS_DONE));
+    recordsToLoad++;
+}
+
+void updatePnnCache() {
+	if ( DBG ) log( "updatePnnCache()");
+	IccFileHandler iccFh = phone.getIccFileHandler();
+    iccFh.loadEFLinearFixedAll(EF_PNN, obtainMessage(EVENT_GET_ALL_PNN_RECORDS_DONE));
+}
+
+private void displayEonsName(int flag) {
+	int[] simPlmn = new int[6]; //v14
+	int[] bcchPlmn = new int[6];//v4
+	int count = 0;
+	int bcchPlmnLength = 0;//v5
+	if ( oplCache == null ) {
+		if ( DBG ) log("oplCache is null");
+		return;
+	}
+	
+	count = oplCache.size();
+	
+	if ( DBG ) log("flag=" + flag);
+	
+	String regOperator = ( flag == 1 ) ? ((GSMPhone) phone).mSST.newSS.getOperatorNumeric() : ((GSMPhone) phone).mSST.ss.getOperatorNumeric();
+	if ( regOperator == null || regOperator.trim().length() == 0 ) {
+		if ( DBG ) log("Registered operator is null or empty.");
+		useMEName();
+		return;
+	}
+	
+	if ( DBG ) log("Number of OPL records = " + count + " regOperator = " + regOperator);
+	
+	oplDataPresent = true;
+	int hLac = -1;
+	GsmCellLocation loc = (GsmCellLocation) phone.getCellLocation();
+	if ( loc != null ) {
+		hLac = loc.getLac();
+	}
+	if ( DBG ) log("hLac="+hLac);
+	if ( hLac == -1 ) {
+		log("Registered Lac is -1.");
+		return;
+	}
+	int ind;
+	for ( ind=0; ind < count; ind++ ) {
+		try {
+			byte[] data = (byte[]) oplCache.get(ind);
+			simPlmn[0]=data[0]&0xf;
+			simPlmn[1]=(data[0]>>4)&0xf;
+			simPlmn[2]=data[1]&0xf;
+			simPlmn[3]=data[2]&0xf;
+			simPlmn[4]=(data[2]>>4)&0xf;
+			simPlmn[5]=(data[1]>>4)&0xf;
+			bcchPlmnLength = regOperator.length();
+			for (int ind1=0; ind1<bcchPlmnLength; ind1++) {
+				bcchPlmn[ind1]=(regOperator.charAt(ind1) - 0x30);
+			}
+			oplDataLac1 = ((data[3] & 0xff) << 8) | (data[4] & 0xff);
+			oplDataLac2 = ((data[5] & 0xff) << 8) | (data[6] & 0xff);
+			oplDataPnnNum = (short) (data[7]&0xff);
+			if (DBG) log("lac1=" + oplDataLac1 + " lac2=" + oplDataLac2 + " hLac=" + hLac + " pnn rec=" + oplDataPnnNum );
+			if (matchSimPlmn( simPlmn, bcchPlmn, bcchPlmnLength)) {
+				if ( oplDataLac1 > hLac || hLac > oplDataLac2 ) {
+					oplDataPresent = false;
+					Log.w(LOG_TAG, "HLAC is not with in range of EF_OPL\'s LACs,ignoring pnn data, hLac=" + hLac + " lac1=" + oplDataLac1 + " lac2=" + oplDataLac2);
+					continue;
+				}
+				if ( oplDataPnnNum < 0 || oplDataPnnNum > 0xff ) {
+					oplDataPresent = false;
+					Log.w(LOG_TAG, "PNN record number in EF_OPL is not valid");
+					continue;
+				}
+				if ( DBG ) log( " lac1=" + oplDataLac1 + " lac2=" + oplDataLac2 + " hLac=" + hLac + " pnn rec=" + oplDataPnnNum);
+				getNameFromPnnRecord(oplDataPnnNum);
+			}
+			else {
+				oplDataPresent = false;
+				if ( DBG ) log("plmn in EF_OPL does not match reg plmn,ignoring pnn data sim plmn " + simPlmn[0]);
+			}
+		}
+		catch(Exception e) {
+			Log.e(LOG_TAG, "Exception while processing OPL data " + e);
+		}
+	}
+	if ( ind >= count ) {
+		if ( DBG ) log("No matching OPL record found, using default method");
+		useMEName();
+	}
+}
+
+private static String extractEmergencyNumber(byte[] ba) {
+	int digit = 0;
+	StringBuffer tempbuf = new StringBuffer();
+	
+	if ( ba != null ) {
+		for ( int j=0; j<3; j++) {
+			digit = (ba[j] >> 0) & 0xf;
+			if (digit < 0 || digit > 9)
+				break;
+			tempbuf.append(digit);
+		}
+	}
+	
+	return tempbuf.toString();
+	
+}
+
+private void getNameFromPnnRecord( int record ) {
+	int length = 0;
+	
+	if ( pnnCache == null || record > pnnCache.size() || record < 1 ) {
+		if ( DBG ) log("pnnCache is null/Invalid PNN Rec, using default method");
+		useMEName();
+		return;
+	}
+	
+	if ( DBG ) log("Number of PNN records = " + pnnCache.size());
+	
+	try {
+		byte[] data = (byte[]) pnnCache.get(record - 1);
+		if (DBG) log("PNN Record Number " + record + " ,hex data " + IccUtils.bytesToHexString( data ));
+		pnnDataPresent = true;
+		
+		if ( data[0] == -1 || data[1] == -1 ) {
+			pnnDataPresent = false;
+			Log.e(LOG_TAG, "EF_PNN: Invalid EF_PNN Data");
+		}
+		else {
+			length = data[1];
+			if (DBG) log("PNN longname length " + length);
+			pnnDataLongName = IccUtils.networkNameToString( data, 2, length);
+			if (DBG) log("PNN longname : " + pnnDataLongName);
+			
+			if ((data[length + 2] == -1) || (data[length+3] == -1)) {
+				if (DBG) log("No PNN shortname");
+			}
+			else {
+				if (DBG) log("PNN shortname length : " + data[length+3]);
+				pnnDataShortName = IccUtils.networkNameToString(data, length + 4, data[length+3]);
+				if (DBG) log("PNN Shortname : " + pnnDataShortName);				
+			}	
+		}
+	}
+	catch(Exception e) {
+		Log.e(LOG_TAG, "Exception while processing PNN data " + e);
+	}
+	((GSMPhone) phone).mSST.updateSpnDisplayWrapper();
+}
+
+
+int getOnsAlg() {
+	int ons_alg = 0;
+	String eons_prop = SystemProperties.get( "persist.cust.tel.eons" );
+	String logMessage = null;
+	
+	if ( DBG ) log("Checking if EONS is enabled.");
+	if ( DBG ) log("sstPlmnOplValue=" + sstPlmnOplValue);
+	if( sstPlmnOplValue == EONS_DISABLED || sstPlmnOplValue == NOT_INITIALIZED ) {
+		if ( DBG ) log("EONS is disabled because of SST restriction.");
+		return 0;
+	}
+	else {
+		if ( adaptPropSet() ) {
+			logMessage = "EONS algorithm enabled because adapt property is set.";
+			ons_alg = 1;
+		}
+		else {
+			if ( eons_prop != null && eons_prop.length() > 0) {
+				try {
+					if ( Integer.valueOf( eons_prop ).intValue() == 1 ) {
+						ons_alg = 1;
+						logMessage = "EONS algorithm enabled for AT&T.";
+					}
+					if ( Integer.valueOf( eons_prop ).intValue() == 2 ) {
+						ons_alg = 2;
+						logMessage = "EONS algorithm enabled for T-Mobile.";
+					}
+				}
+				catch(Exception e) {
+					Log.e(LOG_TAG, "Exception on reading persist.cust.tel.eons " + e);
+				}
+			}
+		}
+		
+		if ( logMessage != null ) {
+			Log.i(LOG_TAG, logMessage);
+		}
+	}
+	return ons_alg;
+}
+
+String getPnnLongName() {
+	if ( isTelefonicaHomeOperator() ) {
+		return pnnHomeName;
+	}
+	if ( pnnDataPresent ) {
+		SystemProperties.set("gsm.eons.name", pnnDataLongName);
+		Log.i(LOG_TAG, "Property gsm.eons.name set to " + SystemProperties.get("gsm.eons.name"));
+		return pnnDataLongName;
+	}
+	
+	SystemProperties.set("gsm.eons.name", null);
+	Log.i(LOG_TAG, "Property gsm.eons.name set to null");
+	return null;
+}
+
+public boolean getReadPlmnModeFlag() {
+	return isPlmnModeBitEnabled;
+}
+
+boolean adaptPropSet() {
+	boolean adapt_set = false;
+	String adapt_prop = SystemProperties.get("persist.cust.tel.adapt");
+	if ( DBG ) log( "adapt_prop=" + adapt_prop);
+	
+	if ( adapt_prop != null && adapt_prop.length() > 0) {
+		try {
+			if ( Integer.valueOf(adapt_prop).intValue() == 1 ) {
+				adapt_set = true;
+				if ( DBG ) log("adapt property enabled.");
+			}			
+		}
+		catch(Exception e) {
+			Log.e(LOG_TAG, "Exception on reading persist.cust.tel.adapt " + e );
+		}
+	}
+	
+	return adapt_set;	
+}
+
+boolean isTelefonicaHomeOperator() {
+	String home_operator = SystemProperties.get("gsm.sim.operator.numeric");
+	
+	if ( home_operator == null ) {
+		return false;
+	}
+	
+	if ( home_operator.equals("21405")) {
+		return true;
+	}
+	
+	if ( home_operator.equals(0x343f5)) {
+		return true;
+	}
+	
+	return false;
+}
+
+void useMEName() {
+	oplDataPresent = false;
+	pnnDataPresent = false;
+	((GSMPhone)phone).mSST.updateSpnDisplayWrapper();
+}
+
+boolean matchSimPlmn(int[] simPlmn, int[] bcchPlmn, int length) {
+	int wildCardDigit = 0xd;
+	boolean match = false;
+	
+	if ( simPlmn[5] == 0xf ) {
+		simPlmn[5] = 0;
+	}
+	
+	for ( int i=0; i<length; i++) {
+		if ( simPlmn[i] == wildCardDigit ) {
+			simPlmn[i] = bcchPlmn[i];
+		}
+	}
+	
+	if ( (simPlmn[0] == bcchPlmn[0]) && (simPlmn[1] == bcchPlmn[1]) && (simPlmn[2] == bcchPlmn[2])) {
+		if ( length == 5 ) {
+			if ( (simPlmn[3] == bcchPlmn[3]) && (simPlmn[4] == bcchPlmn[4]) ) {
+				match = true;
+			} else {
+				match = false;
+			}
+		}
+		else {
+			if ( (simPlmn[3] == bcchPlmn[3]) && (simPlmn[4] == bcchPlmn[4]) && (simPlmn[5] == bcchPlmn[5]))  {
+				match = true;
+			} else {
+				match = false;
+			}			
+		}
+	}
+	
+	return match;
+}
+
 
 }

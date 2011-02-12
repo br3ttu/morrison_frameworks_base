@@ -40,6 +40,7 @@ import android.provider.Settings.SettingNotFoundException;
 import android.provider.Telephony.Intents;
 import android.telephony.ServiceState;
 import android.telephony.SignalStrength;
+import android.telephony.TelephonyManager;
 import android.telephony.gsm.GsmCellLocation;
 import android.text.TextUtils;
 import android.util.Config;
@@ -129,7 +130,7 @@ final class GsmServiceStateTracker extends ServiceStateTracker {
      */
     private boolean mNeedToRegForSimLoaded;
 
-    /** Started the recheck process after finding gprs should registered but not. */
+    /** Started the recheck process after finding gprs should registerd but not. */
     private boolean mStartedGprsRegCheck = false;
 
     /** Already sent the event-log for no gprs register. */
@@ -358,14 +359,8 @@ final class GsmServiceStateTracker extends ServiceStateTracker {
                             EVENT_SIM_RECORDS_LOADED, null);
                     mNeedToRegForSimLoaded = false;
                 }
-
-                boolean skipRestoringSelection = phone.getContext().getResources().getBoolean(
-                        com.android.internal.R.bool.skip_restoring_network_selection);
-
-                if (!skipRestoringSelection) {
-                    // restore the previous network selection.
-                    phone.restoreSavedNetworkSelection(null);
-                }
+                // restore the previous network selection.
+                phone.restoreSavedNetworkSelection(null);
                 pollState();
                 // Signal strength polling stops when radio is off
                 queueNextSignalStrengthPoll();
@@ -420,7 +415,7 @@ final class GsmServiceStateTracker extends ServiceStateTracker {
                 }
 
                 // Release any temporary cell lock, which could have been
-                // acquired to allow a single-shot location update.
+                // aquired to allow a single-shot location update.
                 disableSingleLocationUpdate();
                 break;
 
@@ -505,9 +500,9 @@ final class GsmServiceStateTracker extends ServiceStateTracker {
                 break;
 
             case EVENT_CHECK_REPORT_GPRS:
-                if (ss != null && !isGprsConsistent(gprsState, ss.getState())) {
+                if (ss != null && !isGprsConsistant(gprsState, ss.getState())) {
 
-                    // Can't register data service while voice service is ok
+                    // Can't register data sevice while voice service is ok
                     // i.e. CREG is ok while CGREG is not
                     // possible a network or baseband side error
                     GsmCellLocation loc = ((GsmCellLocation)phone.getCellLocation());
@@ -580,7 +575,13 @@ final class GsmServiceStateTracker extends ServiceStateTracker {
 
         cm.setRadioPower(false, null);
     }
+    
+    // Public accessor for USIM mods...
+    public void updateSpnDisplayWrapper() {
+    	updateSpnDisplay();
+    }
 
+    // TODO: Probably needs updating too :(
     protected void updateSpnDisplay() {
         int rule = phone.mSIMRecords.getDisplayRule(ss.getOperatorNumeric());
         String spn = phone.mSIMRecords.getServiceProviderName();
@@ -656,7 +657,6 @@ final class GsmServiceStateTracker extends ServiceStateTracker {
                     int lac = -1;
                     int cid = -1;
                     int regState = -1;
-                    int psc = -1;
                     if (states.length > 0) {
                         try {
                             regState = Integer.parseInt(states[0]);
@@ -666,11 +666,6 @@ final class GsmServiceStateTracker extends ServiceStateTracker {
                                 }
                                 if (states[2] != null && states[2].length() > 0) {
                                     cid = Integer.parseInt(states[2], 16);
-                                }
-                            }
-                            if (states.length > 14) {
-                                if (states[14] != null && states[14].length() > 0) {
-                                    psc = Integer.parseInt(states[14], 16);
                                 }
                             }
                         } catch (NumberFormatException ex) {
@@ -689,7 +684,6 @@ final class GsmServiceStateTracker extends ServiceStateTracker {
 
                     // LAC and CID are -1 if not avail
                     newCellLoc.setLacAndCid(lac, cid);
-                    newCellLoc.setPsc(psc);
                 break;
 
                 case EVENT_POLL_STATE_GPRS:
@@ -1039,7 +1033,7 @@ final class GsmServiceStateTracker extends ServiceStateTracker {
             phone.notifyLocationChanged();
         }
 
-        if (! isGprsConsistent(gprsState, ss.getState())) {
+        if (! isGprsConsistant(gprsState, ss.getState())) {
             if (!mStartedGprsRegCheck && !mReportedGprsNoReg) {
                 mStartedGprsRegCheck = true;
 
@@ -1056,13 +1050,13 @@ final class GsmServiceStateTracker extends ServiceStateTracker {
     }
 
     /**
-     * Check if GPRS got registered while voice is registered.
+     * Check if GPRS got registred while voice is registered
      *
      * @param gprsState for GPRS registration state, i.e. CGREG in GSM
      * @param serviceState for voice registration state, i.e. CREG in GSM
      * @return false if device only register to voice but not gprs
      */
-    private boolean isGprsConsistent(int gprsState, int serviceState) {
+    private boolean isGprsConsistant (int gprsState, int serviceState) {
         return !((serviceState == ServiceState.STATE_IN_SERVICE) &&
                 (gprsState != ServiceState.STATE_IN_SERVICE));
     }
@@ -1117,13 +1111,13 @@ final class GsmServiceStateTracker extends ServiceStateTracker {
 
         long nextTime;
 
-        // TODO Don't poll signal strength if screen is off
+        // TODO Done't poll signal strength if screen is off
         sendMessageDelayed(msg, POLL_PERIOD_MILLIS);
     }
 
     /**
-     *  Send signal-strength-changed notification if changed.
-     *  Called both for solicited and unsolicited signal strength updates.
+     *  send signal-strength-changed notification if changed
+     *  Called both for solicited and unsolicited signal stength updates
      */
     private void onSignalStrengthResult(AsyncResult ar) {
         SignalStrength oldSignalStrength = mSignalStrength;
@@ -1344,7 +1338,7 @@ final class GsmServiceStateTracker extends ServiceStateTracker {
 
     /**
      * @return true if phone is camping on a technology (eg UMTS)
-     * that could support voice and data simultaneously.
+     * that could support voice and data simultaniously.
      */
     boolean isConcurrentVoiceAndData() {
         return (networkType >= DATA_ACCESS_UMTS);

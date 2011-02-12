@@ -57,6 +57,48 @@ public final class SIMFileHandler extends IccFileHandler implements IccConstants
     }
 
     protected String getEFPath(int efid) {
+    	switch(efid) {
+    	case EF_PBR:
+    		return "3F007F105F3A";
+    	case EF_SMS:
+    		return "3F007F10";
+    	case EF_VOICE_MAIL_INDICATOR_CPHS:
+    	case EF_CFF_CPHS:
+    	case EF_SPN_CPHS:
+    	case EF_CSP:
+    	case EF_INFO_CPHS:
+    	case EF_MAILBOX_CPHS:
+    	case EF_SPN_SHORT_CPHS:
+    		return "3F007F20";
+    	case EF_SST:
+    	case EF_SPN:
+    	case EF_AD:
+    	case EF_PNN:
+    	case EF_MBDN:
+    	case EF_EXT6:
+    	case EF_MBI:
+    	case EF_MWIS:
+    	case EF_CFIS:
+    	case EF_SPDI:
+    		return "3F007F20";
+    	}
+    	
+        String path = getCommonIccEFPath(efid);
+        if (path == null) {
+            // The EFids in USIM phone book entries are decided by the card manufacturer.
+            // So if we don't match any of the cases above and if its a USIM return
+            // the phone book path.
+            IccCard card = phone.getIccCard();
+            if (card != null && card.isApplicationOnIcc(IccCardApplication.AppType.APPTYPE_USIM)) {
+                return "3F007F105F3A";
+            }
+            Log.e(LOG_TAG, "Error: EF Path being returned in null");
+        }
+        return path;
+    	
+    }
+    /*
+    protected String getEFPath(int efid) {
         // TODO(): DF_GSM can be 7F20 or 7F21 to handle backward compatibility.
         // Implement this after discussion with OEMs.
         switch(efid) {
@@ -100,6 +142,7 @@ public final class SIMFileHandler extends IccFileHandler implements IccConstants
         }
         return path;
     }
+    */
 
     protected void logd(String msg) {
         Log.d(LOG_TAG, "[SIMFileHandler] " + msg);
