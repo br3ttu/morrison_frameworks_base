@@ -238,7 +238,7 @@ CameraService::Client::Client(const sp<CameraService>& cameraService,
 
     // Callback is disabled by default
     mPreviewCallbackFlag = FRAME_CALLBACK_FLAG_NOOP;
-    mOrientation = 0;
+ //   mOrientation = 0;
     cameraService->incUsers();
     LOGV("Client::Client X (pid %d)", callingPid);
 }
@@ -575,7 +575,7 @@ status_t CameraService::Client::setOverlay()
             // process of being destroyed.
             for (int retry = 0; retry < 50; ++retry) {
                 mOverlayRef = mSurface->createOverlay(w, h, OVERLAY_FORMAT_DEFAULT,
-                                                      mOrientation);
+                                                      0 /*mOrientation */);
                 if (mOverlayRef != NULL) break;
                 LOGW("Overlay create failed - retrying");
                 usleep(20000);
@@ -606,16 +606,26 @@ status_t CameraService::Client::registerPreviewBuffers()
     CameraParameters params(mHardware->getParameters());
     params.getPreviewSize(&w, &h);
 
-    // don't use a hardcoded format here
-    ISurface::BufferHeap buffers(w, h, w, h,
-                                 HAL_PIXEL_FORMAT_YCrCb_420_SP,
-                                 mOrientation,
-                                 0,
-                                 mHardware->getPreviewHeap());
+    mPreviewWidth = w;
+    mPreviewHeight = h;
 
-    status_t ret = mSurface->registerBuffers(buffers);
-    if (ret != NO_ERROR) {
-        LOGE("registerBuffers failed with status %d", ret);
+    status_t ret = NO_ERROR;
+
+    for (int iBuffer=0; iBuffer<4; iBuffer++ ) {
+        mPreviewBuffers[iBuffer] = NULL;
+        mPreviewHeaps[iBuffer] = mHardware->getPreviewHeapnew(iBuffer);
+
+    // don't use a hardcoded format here
+//    ISurface::BufferHeap buffers(w, h, w, h,
+//                                 HAL_PIXEL_FORMAT_YCrCb_420_SP,
+//                                 0 /*mOrientation*/,
+//                                 0,
+//                                 mHardware->getPreviewHeapnew(iHeap));
+
+//     ret = mSurface->registerBuffers(buffers);
+//     if (ret != NO_ERROR) {
+//        LOGE("registerBuffers failed with status %d", ret);
+//    }
     }
     return ret;
 }
@@ -930,7 +940,7 @@ void CameraService::Client::handleShutter(
         }
         // FIXME: don't use hardcoded format constants here
         ISurface::BufferHeap buffers(w, h, w, h,
-            HAL_PIXEL_FORMAT_YCrCb_420_SP, mOrientation, 0,
+            HAL_PIXEL_FORMAT_YCrCb_420_SP, 0 /* mOrientation */, 0,
             mHardware->getRawHeap());
 
         mSurface->registerBuffers(buffers);
@@ -939,10 +949,38 @@ void CameraService::Client::handleShutter(
 }
 
 // preview callback - frame buffer update
-void CameraService::Client::handlePreviewData(const sp<IMemory>& mem)
+void CameraService::Client::handlePreviewData(const sp<IMemory>& mem, int iPreviewBuffer)
 {
     ssize_t offset;
     size_t size;
+
+    if ( mSurface == NULL ) {
+        LOGE("handlePreviewData: NULL mSurface");
+        return;
+    }
+
+    //mSurface->unregisterBuffers();
+
+    if ( NULL == mPreviewBuffers[iPreviewBuffer] ) {
+	mPreviewBuffers[iPreviewBuffer] = new ISurface::BufferHeap( mPreviewWidth, mPreviewHeight, mPreviewWidth, mPreviewHeight,
+                                 HAL_PIXEL_FORMAT_YCrCb_420_SP,
+                                 0 /*mOrientation*/,
+                                 0,
+                                 mPreviewHeaps[iPreviewBuffer]);
+        mSurface->registerBuffers(*(mPreviewBuffers[iPreviewBuffer]));
+    }
+
+    // don't use a hardcoded format here
+//    ISurface::BufferHeap buffers(mPreviewWidth, mPreviewHeight, mPreviewWidth, mPreviewHeight,
+//                                 HAL_PIXEL_FORMAT_YCrCb_420_SP,
+//                                 0 /*mOrientation*/,
+//                                 0,
+//                                 mPreviewHeaps[iPreviewBuffer]);
+
+//    mSurface->registerBuffers(buffers);
+
+    //mSurface->registerBuffers(*mPreviewBuffers[iPreviewBuffer]);
+
     sp<IMemoryHeap> heap = mem->getMemory(&offset, &size);
 
 #if DEBUG_HEAP_LEAKS && 0 // debugging
@@ -1122,9 +1160,9 @@ void CameraService::Client::dataCallback(int32_t msgType, const sp<IMemory>& dat
         return;
     }
 
-    switch (msgType) {
+    switch (msgType & CAMERA_MSG_ALL_MSGS) {
         case CAMERA_MSG_PREVIEW_FRAME:
-            client->handlePreviewData(dataPtr);
+            client->handlePreviewData(dataPtr, msgType >> 12);
             break;
         case CAMERA_MSG_POSTVIEW_FRAME:
             client->handlePostview(dataPtr);
@@ -1228,6 +1266,7 @@ status_t CameraService::Client::sendCommand(int32_t cmd, int32_t arg1, int32_t a
         if (mHardware->previewEnabled()) {
             return INVALID_OPERATION;
         }
+/*
         switch (arg1) {
             case 0:
                 mOrientation = ISurface::BufferHeap::ROT_0;
@@ -1244,6 +1283,7 @@ status_t CameraService::Client::sendCommand(int32_t cmd, int32_t arg1, int32_t a
             default:
                 return BAD_VALUE;
         }
+*/
         return OK;
     }
 

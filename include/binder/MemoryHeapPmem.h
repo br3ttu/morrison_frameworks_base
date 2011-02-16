@@ -29,9 +29,19 @@ namespace android {
 
 class MemoryHeapBase;
 
+class HeapInterface : public virtual BnMemoryHeap
+{
+public:
+    // all values must be page-aligned
+    virtual sp<IMemory> mapMemory(size_t offset, size_t size) = 0;
+
+    HeapInterface();
+protected:
+    virtual ~HeapInterface();
+};
 // ---------------------------------------------------------------------------
 
-class MemoryHeapPmem : public MemoryHeapBase
+class MemoryHeapPmem : public HeapInterface, public MemoryHeapBase
 {
 public:
     class MemoryPmem : public BnMemory {

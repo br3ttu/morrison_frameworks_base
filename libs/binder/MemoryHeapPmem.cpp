@@ -36,6 +36,10 @@
 
 namespace android {
 
+HeapInterface::HeapInterface() { }
+HeapInterface::~HeapInterface() { }
+
+
 // ---------------------------------------------------------------------------
 
 MemoryHeapPmem::MemoryPmem::MemoryPmem(const sp<MemoryHeapPmem>& heap)

@@ -51,6 +51,7 @@ public:
     void getPictureSize(int *width, int *height) const;
     void setPictureFormat(const char *format);
     const char *getPictureFormat() const;
+    status_t setZoomSize(int a, int b);
 
     void dump() const;
     status_t dump(int fd, const Vector<String16>& args) const;
