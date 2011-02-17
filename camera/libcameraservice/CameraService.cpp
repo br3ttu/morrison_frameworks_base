@@ -238,7 +238,7 @@ CameraService::Client::Client(const sp<CameraService>& cameraService,
 
     // Callback is disabled by default
     mPreviewCallbackFlag = FRAME_CALLBACK_FLAG_NOOP;
- //   mOrientation = 0;
+    mOrientation = 0;
     cameraService->incUsers();
     LOGV("Client::Client X (pid %d)", callingPid);
 }
@@ -575,7 +575,7 @@ status_t CameraService::Client::setOverlay()
             // process of being destroyed.
             for (int retry = 0; retry < 50; ++retry) {
                 mOverlayRef = mSurface->createOverlay(w, h, OVERLAY_FORMAT_DEFAULT,
-                                                      0 /*mOrientation */);
+                                                      mOrientation);
                 if (mOverlayRef != NULL) break;
                 LOGW("Overlay create failed - retrying");
                 usleep(20000);
@@ -940,7 +940,7 @@ void CameraService::Client::handleShutter(
         }
         // FIXME: don't use hardcoded format constants here
         ISurface::BufferHeap buffers(w, h, w, h,
-            HAL_PIXEL_FORMAT_YCrCb_420_SP, 0 /* mOrientation */, 0,
+            HAL_PIXEL_FORMAT_YCrCb_420_SP, mOrientation, 0,
             mHardware->getRawHeap());
 
         mSurface->registerBuffers(buffers);
@@ -964,7 +964,7 @@ void CameraService::Client::handlePreviewData(const sp<IMemory>& mem, int iPrevi
     if ( NULL == mPreviewBuffers[iPreviewBuffer] ) {
 	mPreviewBuffers[iPreviewBuffer] = new ISurface::BufferHeap( mPreviewWidth, mPreviewHeight, mPreviewWidth, mPreviewHeight,
                                  HAL_PIXEL_FORMAT_YCrCb_420_SP,
-                                 0 /*mOrientation*/,
+                                 mOrientation,
                                  0,
                                  mPreviewHeaps[iPreviewBuffer]);
         mSurface->registerBuffers(*(mPreviewBuffers[iPreviewBuffer]));
@@ -1266,7 +1266,7 @@ status_t CameraService::Client::sendCommand(int32_t cmd, int32_t arg1, int32_t a
         if (mHardware->previewEnabled()) {
             return INVALID_OPERATION;
         }
-/*
+
         switch (arg1) {
             case 0:
                 mOrientation = ISurface::BufferHeap::ROT_0;
@@ -1283,7 +1283,7 @@ status_t CameraService::Client::sendCommand(int32_t cmd, int32_t arg1, int32_t a
             default:
                 return BAD_VALUE;
         }
-*/
+
         return OK;
     }
 

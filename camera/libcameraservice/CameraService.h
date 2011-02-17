@@ -185,7 +185,7 @@ private:
 		    int                         mPreviewWidth;
 		    int                         mPreviewHeight;
                     int                         mPreviewCallbackFlag;
-//                    int                         mOrientation;
+                    int                         mOrientation;
 
                     sp<MediaPlayer>             mMediaPlayerClick;
                     sp<MediaPlayer>             mMediaPlayerBeep;
