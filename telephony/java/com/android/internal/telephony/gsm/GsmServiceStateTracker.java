@@ -575,7 +575,13 @@ final class GsmServiceStateTracker extends ServiceStateTracker {
 
         cm.setRadioPower(false, null);
     }
+    
+    // Public accessor for USIM mods...
+    public void updateSpnDisplayWrapper() {
+    	updateSpnDisplay();
+    }
 
+    // TODO: Probably needs updating too :(
     protected void updateSpnDisplay() {
         int rule = phone.mSIMRecords.getDisplayRule(ss.getOperatorNumeric());
         String spn = phone.mSIMRecords.getServiceProviderName();

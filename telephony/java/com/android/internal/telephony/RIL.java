@@ -1411,6 +1411,7 @@ public final class RIL extends BaseCommands implements CommandsInterface {
 
         rr.mp.writeInt(command);
         rr.mp.writeInt(fileid);
+        path = null; // apparently?
         rr.mp.writeString(path);
         rr.mp.writeInt(p1);
         rr.mp.writeInt(p2);

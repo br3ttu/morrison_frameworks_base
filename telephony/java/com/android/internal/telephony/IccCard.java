@@ -684,4 +684,8 @@ public abstract class IccCard {
     private void log(String msg) {
         Log.d(mLogTag, "[IccCard] " + msg);
     }
+    
+    public void setSSTPinDisableAllow(boolean value) {
+    	// TODO: Stub... for now...
+    }
 }
